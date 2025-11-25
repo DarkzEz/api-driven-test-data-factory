@@ -1,0 +1,45 @@
+{
+  "scenario": "homepage-content-fixtures",
+  "generation": {
+    "count": 5,
+    "seed": 20261017
+  },
+  "template": {
+    "id_prefix": "homepage",
+    "titles": [
+      "Autumn collection — editorial card",
+      "New arrivals: typography and color",
+      "QA fixture with punctuation — v2",
+      "Campaign card with a long headline for layout checks"
+    ],
+    "bodies": [
+      "Synthetic content for validating the rendering contract.",
+      "A second fixture includes punctuation: commas, dashes — and quotes.",
+      "This record is generated for testing only; it contains no customer data.",
+      "Whitespace and Unicode are intentionally exercised: café, naïve, 東京."
+    ],
+    "styles": [
+      {
+        "font_family": "Inter",
+        "font_size_px": 16,
+        "color": "#202124",
+        "background_color": "#FFFFFF",
+        "bold": false
+      },
+      {
+        "font_family": "Arial",
+        "font_size_px": 24,
+        "color": "#FFFFFF",
+        "background_color": "#253858",
+        "bold": true
+      },
+      {
+        "font_family": "Georgia",
+        "font_size_px": 20,
+        "color": "#4A154B",
+        "background_color": "#FCE8FF",
+        "bold": false
+      }
+    ]
+  }
+}
