@@ -1,0 +1,188 @@
+# API-driven Test Data Factory
+
+A small, configurable utility for generating deterministic synthetic content fixtures and publishing a batch through an HTTP API. It demonstrates a production-minded approach to test-data automation: validated configuration, reproducible output, an explicit dry-run default, bounded inputs, request timeouts, safe credential handling, batch identity, and tests around success and failure paths.
+
+> **Portfolio note:** this repository is an independent demonstration inspired by the class of automation tasks described in my QA experience. It contains synthetic content and a local demo receiver; it does not contain employer source code, internal endpoints, credentials, customer data, or production schemas.
+
+## Capabilities
+
+- Generate content records with titles, bodies, typography, and colors from a JSON scenario.
+- Produce the same batch for the same configuration and seed.
+- Validate configuration and API payloads before doing work; unexpected fields are rejected.
+- Default to dry-run. Publishing requires the explicit `--execute` flag.
+- Derive a stable SHA-256 batch ID from canonical payload content and send it as an `Idempotency-Key`.
+- Derive fixture IDs from the scenario, seed, and template fingerprint so changed templates do not silently reuse old external IDs.
+- Keep bearer tokens in an environment variable rather than command-line arguments or logs.
+- Apply request timeouts and validate the receiver's response before reporting success.
+- Include a local FastAPI receiver for repeatable end-to-end demonstrations.
+- Run linting, tests, coverage checks, a dry-run smoke check, and a container build in GitHub Actions.
+
+## Architecture
+
+```text
+JSON scenario
+     |
+     v
+Configuration loader ---- Pydantic validation
+     |
+     v
+Deterministic generator ---- synthetic content records
+     |
+     v
+DataBatch ---- stable batch ID / JSON payload
+     |
+     +---- default: dry-run JSON output
+     |
+     +---- --execute: HTTP publisher ---- demo or compatible API
+                                          |
+                                          v
+                                 validated receipt
+```
+
+The factory and receiver use an explicit small API contract. The receiver in `demo_api.py` is a local test double, not a production persistence service: it stores batches in process memory and loses them on restart. Authentication, durable storage, authorization policy, rate limits, and production deployment hardening are intentionally out of scope for this demonstration.
+
+## Requirements
+
+- Python 3.11 or later
+- Docker Engine with the Compose plugin (optional, for the containerized demo)
+
+## Local setup
+
+From the repository root:
+
+```bash
+python -m venv .venv
+```
+
+Activate the environment (PowerShell on Windows):
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+On macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Install the package and development dependencies:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+## Generate fixtures without network access
+
+Dry-run is the default and does not create an HTTP client or make a network request:
+
+```bash
+testdata-factory --config examples/content-batch.json --dry-run
+```
+
+The output is the exact JSON payload intended for the receiver. To save a copy to a file:
+
+```bash
+testdata-factory --config examples/content-batch.json --dry-run --output output/content-batch.json
+```
+
+The output directory must exist. The sample configuration uses synthetic content only. The `seed` makes generation reproducible, so the same configuration produces the same records and batch ID.
+
+## End-to-end demo with Docker Compose
+
+Build and start the local receiver. Its host port is bound to loopback only:
+
+```bash
+docker compose up --build -d demo-api
+```
+
+Check readiness:
+
+```bash
+curl --fail http://127.0.0.1:8080/health
+```
+
+Publish one batch from the host:
+
+```bash
+testdata-factory --config examples/content-batch.json --execute --base-url http://127.0.0.1:8080
+```
+
+The command emits a receipt with `status`, `batch_id`, `accepted_count`, and `duplicate`. Repeating the exact command sends the same content-derived idempotency key; the demo receiver reports the second request as a duplicate instead of storing the batch again.
+
+To run both the receiver and factory as containers:
+
+```bash
+docker compose --profile tools run --rm factory
+```
+
+The Compose-only `--allow-insecure-http` flag is configured for communication over the isolated Compose network. Do not use cleartext HTTP for a non-local service. For non-loopback targets, the CLI rejects HTTP unless the operator explicitly opts in.
+
+Stop the receiver:
+
+```bash
+docker compose down
+```
+
+## API contract
+
+The factory sends `POST /api/v1/test-data` with a JSON object containing `scenario`, `seed`, `items`, and `batch_id`. Each item has an `external_id`, `title`, `body`, `style`, and `metadata`. The actual sample generated by the command contains five complete synthetic items; run the documented dry-run command to inspect a valid, fully populated payload. The `batch_id` is a SHA-256 digest of canonical JSON for the scenario, seed, and items. The `Idempotency-Key` header must match it. The receiver returns HTTP `201` for a new batch and HTTP `200` for an already accepted batch, with this response contract:
+
+```json
+{
+  "status": "accepted",
+  "batch_id": "<same-batch-id>",
+  "accepted_count": 5,
+  "duplicate": false
+}
+```
+
+The publisher validates the response shape, batch ID, and accepted item count before returning success. A non-success HTTP status, network failure, invalid JSON, or inconsistent receipt exits with an actionable error. The publisher does not retry a failed POST automatically: retries are only safe when the target API implements the idempotency contract correctly.
+
+## Configuration
+
+`examples/content-batch.json` describes the scenario, generation count and seed, ID prefix, candidate text values, and style presets. Configuration is deliberately strict: unknown fields, malformed colors, empty lists, invalid lengths, and counts outside the supported range are rejected before generation.
+
+To change the output, copy the example to a new JSON file and edit the values. Do not put credentials or real user data in the scenario.
+
+## Publishing to a compatible API
+
+Set the target URL and optional token in the environment:
+
+PowerShell:
+
+```powershell
+$env:TESTDATA_API_URL = "https://api.example.com"
+# Load TESTDATA_API_TOKEN from your approved secret store before this command.
+testdata-factory --config examples/content-batch.json --execute
+```
+
+macOS/Linux:
+
+```bash
+export TESTDATA_API_URL="https://api.example.com"
+# Load TESTDATA_API_TOKEN from your approved secret store before this command.
+testdata-factory --config examples/content-batch.json --execute
+```
+
+The actual target must implement the API contract above. The tool uses bearer authentication when `TESTDATA_API_TOKEN` is set and never prints the token. Use HTTPS for remote targets and provide credentials through a secret store in any real deployment. Never commit a populated `.env` file or real credentials.
+
+## Quality checks
+
+```bash
+ruff check .
+pytest --cov=testdata_factory --cov-branch --cov-report=term-missing
+```
+
+The tests cover deterministic generation, invalid configuration, dry-run safety, HTTP request construction, authentication and idempotency headers, failed and inconsistent API responses, and the demo receiver's duplicate handling. Network calls in publisher unit tests are intercepted with `httpx.MockTransport`; the tests do not depend on an external service.
+
+## Design decisions and current limitations
+
+- **Determinism:** an isolated `random.Random(seed)` avoids changing global random state and makes the fixture batch reproducible.
+- **Strict input models:** Pydantic rejects invalid configuration and payloads early instead of allowing malformed data to drift into a receiving system.
+- **Explicit mutation:** dry-run is the default; publishing requires a conscious `--execute` flag.
+- **Stable identities:** fixture IDs include a fingerprint of scenario, seed, and template; the batch ID is a SHA-256 digest of canonical batch content. The target must honor the idempotency contract for this to prevent duplicate writes.
+- **Bounded operation:** count, field lengths, style sizes, and HTTP timeouts are constrained.
+- **No unsafe retries:** the factory reports a failed request rather than risking duplicate writes against an API that lacks idempotency support.
+- **Demo-only receiver:** the local receiver uses in-memory storage, has no authentication, and is not intended for public exposure or production use.
+- **No production integration claimed:** the endpoint is a synthetic contract. A real integration would require agreement on authentication, schema, permission model, rate limiting, observability, and data-retention requirements.

@@ -1,0 +1,36 @@
+services:
+  demo-api:
+    build: .
+    command: ["uvicorn", "testdata_factory.demo_api:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  factory:
+    build: .
+    profiles: ["tools"]
+    depends_on:
+      demo-api:
+        condition: service_healthy
+    environment:
+      TESTDATA_API_URL: http://demo-api:8080
+    command:
+      - python
+      - -m
+      - testdata_factory
+      - --config
+      - /app/examples/content-batch.json
+      - --execute
+      - --base-url
+      - http://demo-api:8080
+      - --allow-insecure-http

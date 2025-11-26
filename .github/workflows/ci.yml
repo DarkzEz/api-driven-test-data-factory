@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project and development tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Run tests with coverage
+        run: pytest --cov=testdata_factory --cov-branch --cov-report=term-missing
+
+      - name: Validate example and dry-run behavior
+        run: |
+          testdata-factory --config examples/content-batch.json --dry-run > /tmp/generated-batch.json
+          python -c "import json; p=json.load(open('/tmp/generated-batch.json', encoding='utf-8')); assert len(p['items']) == 5; assert len(p['batch_id']) == 64"
+
+      - name: Containerized end-to-end smoke test
+        run: |
+          docker compose up --build -d demo-api
+          sleep 5
+          testdata-factory --config examples/content-batch.json --execute --base-url http://127.0.0.1:8080
+          testdata-factory --config examples/content-batch.json --execute --base-url http://127.0.0.1:8080
+          docker compose --profile tools run --rm factory
+
+
+      - name: Clean up demo stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+      - name: Build container image
+        run: docker build --tag testdata-factory:${{ github.sha }} .
